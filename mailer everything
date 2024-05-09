@@ -1,0 +1,148 @@
+const fs = require('fs');
+const nodemailer = require('nodemailer');
+const puppeteer = require('puppeteer-core');
+const ini = require('ini');
+const { replacePlaceholders } = require('./placeholders');
+
+// Define the embedLink option as a constant
+const embedLink = true; // Change this to true if you want to embed the link
+
+async function sendEmails(useCustomHeaders = true, sendAsImage = true, sendAttachment = true, hideFromMail = false, embedLink = true) {
+    try {
+        // Read configuration from files
+        let config;
+        try {
+            config = JSON.parse(fs.readFileSync('config.json', 'utf8'));
+        } catch (error) {
+            throw new Error('Error reading config.json:', error);
+        }
+
+        // Check if custom headers, HTML image, and attachment are enabled in config
+        if (!config.enableCustomHeaders || !config.enableHTMLImage || !config.enableAttachment) {
+            throw new Error('Custom headers, HTML image, or attachment is not enabled in config.');
+        }
+
+        const recipients = fs.readFileSync('list.txt', 'utf8').trim().split('\n');
+
+        // Read custom headers from the config if enabled
+        let customHeaders = {};
+        if (useCustomHeaders && config.enableCustomHeaders) {
+            customHeaders = config.customHeaders || {};
+        }
+
+        // Read the content of 'letter.html' for HTML email content
+        const letterContent = fs.readFileSync('letter.html', 'utf8');
+
+        // Create transporter using SMTP configuration
+        const emailTransporter = nodemailer.createTransport(config.smtp);
+
+        // Print the header before sending emails
+        printHeader();
+
+        for (const recipient of recipients) {
+            try {
+                let mailOptions = {
+                    subject: replacePlaceholders('Good Morning ##victimemail##', [recipient]),
+                    from: hideFromMail ? `"##num3##"` : replacePlaceholders('"##num3##" <info@schreinerei-spuck.de>', [recipient]),
+                    to: recipient
+                };
+
+                // Include custom headers if enabled
+                if (useCustomHeaders && Object.keys(customHeaders).length > 0) {
+                    mailOptions.headers = customHeaders;
+                }
+
+                // Convert letter HTML content to an image if enabled
+                if (sendAsImage && config.enableHTMLImage) {
+                    try {
+                        const { imageBuffer, link } = await generateImage(replacePlaceholders(letterContent, [recipient]), embedLink ? replacePlaceholders('##link##', [recipient]) : null);
+                        // Set the email body as an image with optional link
+                        const cid = `letter_image_${Date.now()}`;
+                        const imageUrl = `cid:${cid}`;
+                        mailOptions.html = `<a href="${link || '#'}" style="text-decoration: none;"><img src="${imageUrl}" style="display: block; border: 0; outline: none;"></a>`;
+                        mailOptions.attachments = [{
+                            filename: `${cid}.png`,
+                            content: imageBuffer,
+                            cid: cid
+                        }];
+                    } catch (error) {
+                        console.error('Error converting letter to image:', error);
+                    }
+                } else {
+                    // Set the letter HTML content as email body if not sending as image
+                    mailOptions.html = replacePlaceholders(letterContent, [recipient]);
+                }
+
+                // Check if sending attachment is enabled
+                if (sendAttachment && config.enableAttachment) {
+                    try {
+                        // Read attachment content
+                        let attachmentContent = fs.readFileSync('attach.html', 'utf8');
+                        // Replace placeholders in attachment content
+                        attachmentContent = replacePlaceholders(attachmentContent, [recipient]);
+
+                        // Attach HTML file as binary data
+                        const attachment = {
+                            filename: `att${replacePlaceholders('##num3##', [recipient])}.eml`, // Replaced filename with placeholder
+                            content: attachmentContent, // Use modified attachment content
+                            contentType: 'eml/html', // Specify the content type as HTML
+                            disposition: 'attachment' // Specify content disposition as an attachment
+                        };
+
+                        mailOptions.attachments = mailOptions.attachments || []; // Initialize attachments array if not already present
+                        mailOptions.attachments.push(attachment);
+                    } catch (error) {
+                        console.error('Error reading attachment:', error);
+                    }
+                }
+
+                // Send email using transporter
+                await emailTransporter.sendMail(mailOptions);
+                console.log(`Email sent successfully to: ${recipient}`);
+            } catch (error) {
+                console.error('Error sending email to', recipient, error);
+            }
+        }
+    } catch (error) {
+        console.error('Error:', error);
+    }
+}
+
+// Function to print the styled header
+function printHeader() {
+    console.log("\x1b[36m_________________________________________________________________");
+    console.log("| \x1b[39m      Coders telegram @ceowire                                     \x1b[36m|");
+    console.log("| \x1b[52m ______    ____         ____                     __  ______        \x1b[36m|");
+    console.log("| \x1b[35m |_____   |__    |     |__        |\\ /|   /__\\  |  | |__           \x1b[36m|");
+    console.log("| \x1b[52m ______|  |____  |___  |          |   |  /    \\ |__| |____         \x1b[36m|");
+    console.log("| \x1b[35m                                                                   \x1b[36m|");
+    console.log("| \x1b[33m    Make sure leads are debounced                                  \x1b[36m|");
+    console.log("| \x1b[32m                                      Report any problems to coder \x1b[36m|");
+    console.log("\x1b[36m___________________________________________________________________  \x1b[0m");
+}
+
+// Helper function to generate image from HTML content using Puppeteer
+async function generateImage(htmlContent, link = null) {
+    try {
+        const browser = await puppeteer.launch({
+            executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' // Path to Chrome executable
+        });
+        const page = await browser.newPage();
+        await page.setContent(htmlContent);
+
+        let imageBuffer = await page.screenshot({ type: 'png' });
+
+        await browser.close();
+
+        return { imageBuffer, link };
+    } catch (error) {
+        console.error('Error generating image:', error);
+        throw error;
+    }
+}
+
+// Set hideFromMail to true if you want to hide the email address from the sender's name
+const hideFromMail = false;
+
+// Call the sendEmails function with the specified parameters
+sendEmails(true, true, false, hideFromMail, embedLink); // Pass embedLink constant as an argument
